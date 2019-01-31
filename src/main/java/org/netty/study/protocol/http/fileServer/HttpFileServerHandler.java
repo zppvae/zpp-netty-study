@@ -23,8 +23,7 @@ import static io.netty.handler.codec.http.HttpResponseStatus.*;
 import static io.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
 
-public class HttpFileServerHandler extends
-        SimpleChannelInboundHandler<FullHttpRequest> {
+public class HttpFileServerHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
     private final String url;
 
     public HttpFileServerHandler(String url) {
@@ -34,6 +33,7 @@ public class HttpFileServerHandler extends
     @Override
     public void messageReceived(ChannelHandlerContext ctx,
                                 FullHttpRequest request) throws Exception {
+        //判断解码结果
         if (!request.getDecoderResult().isSuccess()) {
             sendError(ctx, BAD_REQUEST);
             return;
@@ -49,25 +49,31 @@ public class HttpFileServerHandler extends
             return;
         }
         File file = new File(path);
+
+        //隐藏文件或者文件不存在
         if (file.isHidden() || !file.exists()) {
             sendError(ctx, NOT_FOUND);
             return;
         }
+        //目录
         if (file.isDirectory()) {
             if (uri.endsWith("/")) {
+                //发送目录的链接给客户端浏览器
                 sendListing(ctx, file);
             } else {
                 sendRedirect(ctx, uri + '/');
             }
             return;
         }
+        //是文件
         if (!file.isFile()) {
             sendError(ctx, FORBIDDEN);
             return;
         }
         RandomAccessFile randomAccessFile = null;
         try {
-            randomAccessFile = new RandomAccessFile(file, "r");// 以只读的方式打开文件
+            // 以只读的方式打开文件
+            randomAccessFile = new RandomAccessFile(file, "r");
         } catch (FileNotFoundException fnfe) {
             sendError(ctx, NOT_FOUND);
             return;
@@ -81,13 +87,16 @@ public class HttpFileServerHandler extends
         }
         ctx.write(response);
         ChannelFuture sendFileFuture;
+
+        //通过ChunkedFile对象将文件写入到发送缓冲区
         sendFileFuture = ctx.write(new ChunkedFile(randomAccessFile, 0,
-                fileLength, 8192), ctx.newProgressivePromise());
+                                    fileLength, 8192),
+                                    ctx.newProgressivePromise());
         sendFileFuture.addListener(new ChannelProgressiveFutureListener() {
             @Override
             public void operationProgressed(ChannelProgressiveFuture future,
                                             long progress, long total) {
-                if (total < 0) { // total unknown
+                if (total < 0) {
                     System.err.println("Transfer progress: " + progress);
                 } else {
                     System.err.println("Transfer progress: " + progress + " / "
@@ -101,9 +110,11 @@ public class HttpFileServerHandler extends
                 System.out.println("Transfer complete.");
             }
         });
-        ChannelFuture lastContentFuture = ctx
-                .writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
+
+        //使用chunked编码，最后需要发送一个编码结束的空消息体
+        ChannelFuture lastContentFuture = ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT);
         if (!isKeepAlive(request)) {
+            //服务端主动关闭连接
             lastContentFuture.addListener(ChannelFutureListener.CLOSE);
         }
     }
@@ -132,15 +143,20 @@ public class HttpFileServerHandler extends
         if (!uri.startsWith(url)) {
             return null;
         }
+        //不是子目录（文件）
         if (!uri.startsWith("/")) {
             return null;
         }
+        //将硬件编码的文件路径分隔符替换为本地操作系统的文件路径分隔符
         uri = uri.replace('/', File.separatorChar);
         if (uri.contains(File.separator + '.')
                 || uri.contains('.' + File.separator) || uri.startsWith(".")
                 || uri.endsWith(".") || INSECURE_URI.matcher(uri).matches()) {
             return null;
         }
+
+        //构造文件路径返回
+        //当前工程所在的目录 + URI构造绝对路径
         return System.getProperty("user.dir") + File.separator + uri;
     }
 
@@ -177,6 +193,8 @@ public class HttpFileServerHandler extends
             buf.append("</a></li>\r\n");
         }
         buf.append("</ul></body></html>\r\n");
+
+        //分配对应消息的缓冲对象
         ByteBuf buffer = Unpooled.copiedBuffer(buf, CharsetUtil.UTF_8);
         response.content().writeBytes(buffer);
         buffer.release();
